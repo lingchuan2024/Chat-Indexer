@@ -15,17 +15,19 @@ var layoutEl = null;
 var observer = null;
 
 function findLayoutTarget() {
-  var cfg = getConfig();
-  if (cfg && cfg.scrollSelector) {
-    var el = document.querySelector(cfg.scrollSelector);
-    if (el && el.clientWidth > 300) return el;
+  var selectors = getScrollSelectors();
+  for (var i = 0; i < selectors.length; i++) {
+    try {
+      var el = document.querySelector(selectors[i]);
+      if (el && el.clientWidth > 300) return el;
+    } catch (_) {}
   }
 
   var allDivs = document.querySelectorAll("div");
   var best = null;
   var bestDepth = Infinity;
-  for (var i = 0; i < allDivs.length; i++) {
-    var div = allDivs[i];
+  for (var j = 0; j < allDivs.length; j++) {
+    var div = allDivs[j];
     var style = window.getComputedStyle(div);
     if ((style.overflowY === "auto" || style.overflowY === "scroll") &&
         div.clientWidth > 300 && div.clientWidth < window.innerWidth) {
@@ -52,7 +54,7 @@ function resetLayoutMargin() {
 
 function toggleSidebar() {
   isVisible = !isVisible;
-  window._isVisible = isVisible;
+  window["_isVisible"] = isVisible;
   saveSettings();
   if (isVisible) {
     sidebar.classList.remove("ctoc-hidden");
@@ -134,7 +136,7 @@ function makeResizable(handle) {
     var w = startWidth + dx;
     w = Math.max(SIDEBAR_MIN_WIDTH, Math.min(w, SIDEBAR_MAX_WIDTH));
     sidebarWidth = w;
-    window._sidebarWidth = w;
+    window["_sidebarWidth"] = w;
     sidebar.style.width = w + "px";
     if (isVisible) applyLayoutMargin();
   }
@@ -188,8 +190,8 @@ function saveSettings() {
 function loadSettings() {
   try {
     var w = localStorage.getItem("ctoc-width");
-    if (w) { sidebarWidth = parseInt(w, 10); window._sidebarWidth = sidebarWidth; }
+    if (w) { sidebarWidth = parseInt(w, 10); window["_sidebarWidth"] = sidebarWidth; }
     var v = localStorage.getItem("ctoc-visible");
-    if (v === "0") { isVisible = false; window._isVisible = false; }
+    if (v === "0") { isVisible = false; window["_isVisible"] = false; }
   } catch (_) {}
 }

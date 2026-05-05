@@ -25,8 +25,29 @@ function stripMarkdown(text) {
     .trim();
 }
 
+function cleanUserText(text) {
+  // strip noise from user messages: file uploads, citations, search context, etc.
+  return text
+    // ChatGPT file upload indicators
+    .replace(/^Uploaded file[s]?:[^\n]*\n*/gi, "")
+    .replace(/^I uploaded:[^\n]*\n*/gi, "")
+    .replace(/^Attached (file|document|image)[s]?:[^\n]*\n*/gi, "")
+    .replace(/^File[s]? attached:[^\n]*\n*/gi, "")
+    .replace(/^Here is (a|the) (file|document):[^\n]*\n*/gi, "")
+    // citation markers
+    .replace(/\[\^?\d+\]/g, "")
+    .replace(/\[\d+(?:,\d+)*\]/g, "")
+    // "Search:" / "Searched:" prefix from web-search mode
+    .replace(/^(Search(ed)?|搜(索|了))[：:][^\n]*\n*/gi, "")
+    // "You said:" / "Previous:" context prefixes
+    .replace(/^(You said|Previous(ly)?|Context)[：:][^\n]*\n*/gi, "")
+    // collapse whitespace
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function truncate(text, maxLen) {
-  var clean = stripMarkdown(text);
+  var clean = stripMarkdown(cleanUserText(text));
   var line = clean.split("\n")[0].trim();
   if (!line) line = clean;
   if (line.length <= maxLen) return line;

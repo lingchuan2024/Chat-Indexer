@@ -4,43 +4,59 @@
 var tocList = null;
 var lastActiveGroupEl = null;
 
-// Resolve a group's DOM element at click time (refs may be stale due to SPA re-renders)
-function resolveGroupEl(group) {
-  // try the stored ref first
-  if (group.el && group.el.isConnected) return group.el;
+function textLooksSimilar(expected, actual) {
+  if (!expected || !actual) return false;
+  if (actual.indexOf(expected) === 0 || expected.indexOf(actual) === 0) return true;
+  return actual.indexOf(expected.slice(0, Math.min(expected.length, 24))) !== -1;
+}
 
-  // re-query by message-id
-  if (group.id) {
-    var el = document.querySelector('[data-message-id="' + group.id + '"]');
-    if (el) { group.el = el; return el; }
-  }
+function findMatchingMessage(group, role) {
+  var messages = findAllMessages();
+  var targetIndex = role === "assistant" ? group.assistantIndex : group.userIndex;
+  var targetId = role === "assistant" ? group.assistantId : group.id;
+  var targetText = role === "assistant"
+    ? (group.assistantExcerpt || truncate(group.assistantText || "", 80))
+    : group.title;
+  var best = null;
+  var bestScore = Infinity;
 
-  // fallback: find by text match among message-author-role=user nodes
-  var userNodes = document.querySelectorAll('[data-message-author-role="user"]');
-  for (var i = 0; i < userNodes.length; i++) {
-    var t = (userNodes[i].textContent || "").trim();
-    if (t.indexOf(group.title) === 0 || group.title.indexOf(t) === 0) {
-      group.el = userNodes[i];
-      return userNodes[i];
+  for (var i = 0; i < messages.length; i++) {
+    var node = messages[i];
+    if (detectRole(node) !== role) continue;
+
+    if (targetId && getMessageId(node, i, role) === targetId) return node;
+
+    var text = truncate((node.textContent || "").trim(), role === "assistant" ? 80 : 50);
+    if (!textLooksSimilar(targetText, text)) continue;
+
+    var score = Math.abs(i - (targetIndex >= 0 ? targetIndex : i));
+    if (score < bestScore) {
+      best = node;
+      bestScore = score;
     }
   }
-  return null;
+
+  return best;
+}
+
+function resolveGroupEl(group) {
+  if (group.el && group.el.isConnected) return group.el;
+  var el = findMatchingMessage(group, "user");
+  if (el) group.el = el;
+  return el;
+}
+
+function resolveAssistantEl(group) {
+  if (group.assistantEl && group.assistantEl.isConnected) return group.assistantEl;
+  var el = findMatchingMessage(group, "assistant");
+  if (el) group.assistantEl = el;
+  return el;
 }
 
 function resolveSubEl(group, sub) {
-  // try stored ref
   if (sub.el && sub.el.isConnected) return sub.el;
 
-  // re-find: get group element, then find heading by text
-  var gEl = resolveGroupEl(group);
-  if (!gEl) return null;
-
-  // find the assistant message that follows this user message
-  var next = gEl.nextElementSibling;
-  while (next && next.getAttribute("data-message-author-role") !== "assistant") {
-    next = next.nextElementSibling;
-  }
-  var container = next || document;
+  var container = resolveAssistantEl(group) || resolveGroupEl(group) || document;
 
   var headings = container.querySelectorAll("h1, h2, h3, h4");
   for (var i = 0; i < headings.length; i++) {
@@ -144,14 +160,9 @@ function renderTOC(groups) {
           snipItem.title = "在 AI 回复中";
           snipItem.addEventListener("click", function (e) {
             e.stopPropagation();
+            var assistantEl = resolveAssistantEl(capturedGroup);
             var gEl = resolveGroupEl(capturedGroup);
-            if (!gEl) return;
-            // find assistant message sibling
-            var next = gEl.nextElementSibling;
-            while (next && next.getAttribute("data-message-author-role") !== "assistant") {
-              next = next.nextElementSibling;
-            }
-            var target = next ? findTextContainer(next, capturedQuery) || next : gEl;
+            var target = assistantEl ? findTextContainer(assistantEl, capturedQuery) || assistantEl : gEl;
             scrollToEl(target);
           });
           subsEl.appendChild(snipItem);

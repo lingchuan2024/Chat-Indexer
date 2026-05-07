@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AI Chat 目录导航",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "为 ChatGPT、DeepSeek、Kimi、Gemini 对话页面添加目录导航与阅读位置追踪",
   "icons": {
     "16": "icons/icon16.png",

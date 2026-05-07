@@ -36,25 +36,37 @@ var DEFAULT_PLATFORM_CONFIG = {
 var PLATFORM_CONFIGS = {
   "chatgpt.com": {
     name: "ChatGPT",
-    msgSelectors: ['[data-message-author-role]'],
+    msgSelectors: [
+      '[data-message-author-role]',
+      '[class*="message"]',
+      'article'
+    ],
     idAttrs: ["data-message-id", "data-testid", "id"],
     roleAttr: "data-message-author-role",
     roleMap: {
       user: "user",
       assistant: "assistant",
     },
-    scrollSelectors: ['[class*="react-scroll-to-bottom"]'],
+    userSelectors: ['[data-message-author-role="user"]'],
+    assistantSelectors: ['[data-message-author-role="assistant"]'],
+    scrollSelectors: ['[class*="react-scroll-to-bottom"]', 'main', '[class*="scroll"]'],
   },
   "chat.openai.com": {
     name: "ChatGPT",
-    msgSelectors: ['[data-message-author-role]'],
+    msgSelectors: [
+      '[data-message-author-role]',
+      '[class*="message"]',
+      'article'
+    ],
     idAttrs: ["data-message-id", "data-testid", "id"],
     roleAttr: "data-message-author-role",
     roleMap: {
       user: "user",
       assistant: "assistant",
     },
-    scrollSelectors: ['[class*="react-scroll-to-bottom"]'],
+    userSelectors: ['[data-message-author-role="user"]'],
+    assistantSelectors: ['[data-message-author-role="assistant"]'],
+    scrollSelectors: ['[class*="react-scroll-to-bottom"]', 'main', '[class*="scroll"]'],
   },
   "chat.deepseek.com": {
     name: "DeepSeek",

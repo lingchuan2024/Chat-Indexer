@@ -70,6 +70,37 @@ function groupsEqual(a, b) {
   return true;
 }
 
+function isChatGPTHost() {
+  return PLATFORM_HOST === "chatgpt.com" || PLATFORM_HOST === "chat.openai.com";
+}
+
+function extractConversationIdFromUrl(url) {
+  if (!url) return "";
+  var match = String(url).match(/\/conversation\/([a-zA-Z0-9-]+)/);
+  return match ? match[1] : "";
+}
+
+function getConversationIdFromLocation() {
+  var path = location.pathname || "";
+  var match = path.match(/\/c\/([a-zA-Z0-9-]+)/) || path.match(/\/chat\/([a-zA-Z0-9-]+)/);
+  return match ? match[1] : "";
+}
+
+function getConversationCacheKey(conversationId) {
+  if (!isChatGPTHost()) return "";
+  var targetConversationId = conversationId || getConversationIdFromLocation();
+  if (!targetConversationId) return "";
+  return "ctoc-chatgpt-cache::" + targetConversationId;
+}
+
+function safeJsonParse(text, fallback) {
+  try {
+    return JSON.parse(text);
+  } catch (_) {
+    return fallback;
+  }
+}
+
 function getScrollRoot() {
   var selectors = typeof getScrollSelectors === "function" ? getScrollSelectors() : [];
   for (var i = 0; i < selectors.length; i++) {
@@ -187,6 +218,41 @@ function notifyNavigationHistoryChange() {
   if (typeof updateReturnButtonState === "function") updateReturnButtonState();
 }
 
+function restoreNavigationSnapshot(snapshot, behavior) {
+  if (!snapshot) return;
+
+  var scrollEl = snapshot.isDocumentScroll
+    ? (document.scrollingElement || document.documentElement)
+    : (snapshot.scrollEl && snapshot.scrollEl.isConnected ? snapshot.scrollEl : getScrollRoot());
+
+  var mode = behavior || "smooth";
+  if (snapshot.anchorEl && snapshot.anchorEl.isConnected) {
+    var anchorScrollEl = snapshot.isDocumentScroll
+      ? (document.scrollingElement || document.documentElement)
+      : getNearestScrollableAncestor(snapshot.anchorEl);
+    var targetScrollEl = snapshot.isDocumentScroll ? scrollEl : anchorScrollEl;
+    var targetTop = snapshot.scrollTop;
+
+    if (snapshot.isDocumentScroll) {
+      targetTop = window.scrollY + snapshot.anchorEl.getBoundingClientRect().top - snapshot.anchorOffset;
+      window.scrollTo({ top: Math.max(0, targetTop), behavior: mode });
+    } else if (targetScrollEl && typeof targetScrollEl.scrollTo === "function") {
+      targetTop =
+        targetScrollEl.scrollTop +
+        getAnchorOffset(snapshot.anchorEl, targetScrollEl, false) -
+        snapshot.anchorOffset;
+      targetScrollEl.scrollTo({ top: Math.max(0, targetTop), behavior: mode });
+    }
+    return;
+  }
+
+  if (snapshot.isDocumentScroll) {
+    window.scrollTo({ top: snapshot.scrollTop, behavior: mode });
+  } else if (scrollEl && typeof scrollEl.scrollTo === "function") {
+    scrollEl.scrollTo({ top: snapshot.scrollTop, behavior: mode });
+  }
+}
+
 function rememberCurrentPosition() {
   if (isRestoringNavigation) return;
 
@@ -218,33 +284,8 @@ function returnToPreviousPosition() {
     return;
   }
 
-  var scrollEl = snapshot.isDocumentScroll
-    ? (document.scrollingElement || document.documentElement)
-    : (snapshot.scrollEl && snapshot.scrollEl.isConnected ? snapshot.scrollEl : getScrollRoot());
-
   isRestoringNavigation = true;
-  if (snapshot.anchorEl && snapshot.anchorEl.isConnected) {
-    var anchorScrollEl = snapshot.isDocumentScroll
-      ? (document.scrollingElement || document.documentElement)
-      : getNearestScrollableAncestor(snapshot.anchorEl);
-    var targetScrollEl = snapshot.isDocumentScroll ? scrollEl : anchorScrollEl;
-    var targetTop = snapshot.scrollTop;
-
-    if (snapshot.isDocumentScroll) {
-      targetTop = window.scrollY + snapshot.anchorEl.getBoundingClientRect().top - snapshot.anchorOffset;
-      window.scrollTo({ top: Math.max(0, targetTop), behavior: "smooth" });
-    } else if (targetScrollEl && typeof targetScrollEl.scrollTo === "function") {
-      targetTop =
-        targetScrollEl.scrollTop +
-        getAnchorOffset(snapshot.anchorEl, targetScrollEl, false) -
-        snapshot.anchorOffset;
-      targetScrollEl.scrollTo({ top: Math.max(0, targetTop), behavior: "smooth" });
-    }
-  } else if (snapshot.isDocumentScroll) {
-    window.scrollTo({ top: snapshot.scrollTop, behavior: "smooth" });
-  } else if (scrollEl && typeof scrollEl.scrollTo === "function") {
-    scrollEl.scrollTo({ top: snapshot.scrollTop, behavior: "smooth" });
-  }
+  restoreNavigationSnapshot(snapshot, "smooth");
 
   setTimeout(function () {
     isRestoringNavigation = false;

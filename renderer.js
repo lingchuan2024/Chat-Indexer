@@ -4,6 +4,10 @@
 var tocList = null;
 var lastActiveGroupEl = null;
 
+function getGroupSearchText(group) {
+  return group.assistantText || group.assistantSearchText || group.assistantExcerpt || "";
+}
+
 function textLooksSimilar(expected, actual) {
   if (!expected || !actual) return false;
   if (actual.indexOf(expected) === 0 || expected.indexOf(actual) === 0) return true;
@@ -75,9 +79,10 @@ function renderTOC(groups) {
 
   var query = (window._filterText || "").trim().toLowerCase();
   var visibleGroups = groups.filter(function (g) {
+    var assistantSearchText = getGroupSearchText(g).toLowerCase();
     if (!query) return true;
     if (g.title.toLowerCase().indexOf(query) !== -1) return true;
-    if (g.assistantText.toLowerCase().indexOf(query) !== -1) return true;
+    if (assistantSearchText.indexOf(query) !== -1) return true;
     return g.subs.some(function (s) { return s.title.toLowerCase().indexOf(query) !== -1; });
   });
 
@@ -145,14 +150,15 @@ function renderTOC(groups) {
       subsEl.appendChild(subItem);
     });
 
-    if (query && group.assistantText) {
-      var textMatch = group.assistantText.toLowerCase().indexOf(query) !== -1;
+    var searchableAssistantText = getGroupSearchText(group);
+    if (query && searchableAssistantText) {
+      var textMatch = searchableAssistantText.toLowerCase().indexOf(query) !== -1;
       var noHeadingMatch = !group.subs.some(function (s) { return s.title.toLowerCase().indexOf(query) !== -1; });
       if (textMatch && noHeadingMatch) {
         (function () {
           var capturedQuery = query;
           var capturedGroup = group;
-          var snippet = extractSnippet(group.assistantText, capturedQuery);
+          var snippet = extractSnippet(searchableAssistantText, capturedQuery);
           var snipItem = document.createElement("div");
           snipItem.className = "ctoc-item ctoc-snippet";
           snipItem.style.paddingLeft = "20px";

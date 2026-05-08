@@ -2,6 +2,89 @@
 "use strict";
 
 var scanTimer = null;
+var isBuildingTOC = false;
+var pendingTOCBuild = false;
+var hydratedHistoryUrl = "";
+var isHydratingHistory = false;
+var cachedConversationGroups = null;
+var cachedConversationKey = "";
+var CONVERSATION_CACHE_INDEX_KEY = "ctoc-chatgpt-cache-index";
+var MAX_CONVERSATION_CACHE_ENTRIES = 15;
+
+function resetConversationState() {
+  hydratedHistoryUrl = "";
+  cachedConversationKey = "";
+  cachedConversationGroups = null;
+  window._groups = [];
+  if (typeof renderTOC === "function") renderTOC([]);
+}
+
+function readConversationCacheIndex() {
+  var index = safeJsonParse(localStorage.getItem(CONVERSATION_CACHE_INDEX_KEY), []);
+  if (!Array.isArray(index)) return [];
+  return index.filter(function (entry) {
+    return entry && typeof entry.key === "string" && entry.key;
+  });
+}
+
+function writeConversationCacheIndex(index) {
+  try {
+    localStorage.setItem(CONVERSATION_CACHE_INDEX_KEY, JSON.stringify(index));
+  } catch (_) {}
+}
+
+function trackConversationCacheKey(key) {
+  if (!key) return;
+  var index = readConversationCacheIndex().filter(function (entry) {
+    return entry.key !== key;
+  });
+
+  index.push({ key: key });
+
+  while (index.length > MAX_CONVERSATION_CACHE_ENTRIES) {
+    var removed = index.shift();
+    if (removed && removed.key) {
+      try {
+        localStorage.removeItem(removed.key);
+      } catch (_) {}
+    }
+  }
+
+  writeConversationCacheIndex(index);
+}
+
+function compactGroupForCache(group) {
+  return {
+    id: group.id || "",
+    title: group.title || "",
+    text: "",
+    el: null,
+    userIndex: typeof group.userIndex === "number" ? group.userIndex : -1,
+    subs: (group.subs || []).map(function (sub) {
+      return {
+        title: sub.title || "",
+        depth: typeof sub.depth === "number" ? sub.depth : 0,
+        el: null,
+      };
+    }),
+    assistantText: "",
+    assistantSearchText: group.assistantExcerpt || "",
+    assistantEl: null,
+    assistantId: group.assistantId || "",
+    assistantIndex: typeof group.assistantIndex === "number" ? group.assistantIndex : -1,
+    assistantExcerpt: group.assistantExcerpt || "",
+  };
+}
+
+function compactGroupsForCache(groups) {
+  return (groups || []).map(compactGroupForCache);
+}
+
+function delay(ms) {
+  return new Promise(function (resolve) {
+    setTimeout(resolve, ms);
+  });
+}
 
 function getMessageBodyNode(node, role) {
   if (!node) return null;
@@ -79,6 +162,14 @@ function getNodeDepth(node) {
   return depth;
 }
 
+function hasMultipleExplicitRoleDescendants(node) {
+  if (!node || typeof node.querySelectorAll !== "function") return false;
+  var nested = node.querySelectorAll(
+    '[data-message-author-role], [data-role="user"], [data-role="assistant"], [data-role="model"], [data-role="human"], [data-role="ai"], [data-role="bot"]'
+  );
+  return nested.length > 1;
+}
+
 function hasPreferredAncestor(node, nodes) {
   var nodeText = (node.textContent || "").trim();
   var nodeLen = nodeText.length;
@@ -92,6 +183,7 @@ function hasPreferredAncestor(node, nodes) {
     var otherText = (other.textContent || "").trim();
     var otherLen = otherText.length;
     if (!otherLen || otherLen < nodeLen * 1.2) continue;
+    if (hasMultipleExplicitRoleDescendants(other)) continue;
 
     var otherRole = detectRole(other);
     if (otherRole === nodeRole) return true;
@@ -191,6 +283,7 @@ function findAllMessages() {
 function filterValidMessages(nodes) {
   return nodes.filter(function (n) {
     if (isExcludedNode(n)) return false;
+    if (hasMultipleExplicitRoleDescendants(n)) return false;
     var role = detectRole(n);
     var text = getMessageText(n, role);
     if (text.length < 5) return false;
@@ -214,6 +307,294 @@ function dedupeMessages(nodes) {
     seen.add(key);
     return true;
   });
+}
+
+function shouldHydrateHistory() {
+  return (PLATFORM_HOST === "chatgpt.com" || PLATFORM_HOST === "chat.openai.com") && hydratedHistoryUrl !== location.href;
+}
+
+async function hydrateHistoryForTOC() {
+  if (!shouldHydrateHistory() || isHydratingHistory) return null;
+
+  var scrollEl = getScrollRoot();
+  if (!scrollEl) return null;
+
+  var snapshot = captureNavigationSnapshot();
+  var stagnantRounds = 0;
+  isHydratingHistory = true;
+
+  try {
+    for (var i = 0; i < 8; i++) {
+      var beforeCount = findAllMessages().length;
+      var beforeHeight = scrollEl.scrollHeight;
+      var beforeTop = scrollEl === document.scrollingElement || scrollEl === document.documentElement
+        ? window.scrollY
+        : scrollEl.scrollTop;
+
+      if (scrollEl === document.scrollingElement || scrollEl === document.documentElement) {
+        window.scrollTo({ top: 0, behavior: "auto" });
+      } else if (typeof scrollEl.scrollTo === "function") {
+        scrollEl.scrollTo({ top: 0, behavior: "auto" });
+      } else {
+        scrollEl.scrollTop = 0;
+      }
+
+      await delay(350);
+
+      var afterCount = findAllMessages().length;
+      var afterHeight = scrollEl.scrollHeight;
+      var afterTop = scrollEl === document.scrollingElement || scrollEl === document.documentElement
+        ? window.scrollY
+        : scrollEl.scrollTop;
+
+      var changed = afterCount > beforeCount || afterHeight !== beforeHeight || afterTop !== beforeTop;
+      if (changed) stagnantRounds = 0;
+      else stagnantRounds++;
+
+      if (afterTop <= 2 && stagnantRounds >= 2) break;
+    }
+
+    hydratedHistoryUrl = location.href;
+    return snapshot;
+  } finally {
+    isHydratingHistory = false;
+  }
+}
+
+function mergeGroupsForHydratedHistory(oldGroups, newGroups) {
+  if (!oldGroups || oldGroups.length === 0) return newGroups;
+  if (hydratedHistoryUrl !== location.href || newGroups.length >= oldGroups.length) return newGroups;
+
+  var merged = [];
+  var seen = {};
+  var freshByKey = {};
+
+  newGroups.forEach(function (group) {
+    freshByKey[(group.id || "") + "::" + group.title] = group;
+  });
+
+  oldGroups.forEach(function (group) {
+    var key = (group.id || "") + "::" + group.title;
+    var fresh = freshByKey[key];
+    merged.push(fresh || group);
+    seen[key] = true;
+  });
+
+  newGroups.forEach(function (group) {
+    var key = (group.id || "") + "::" + group.title;
+    if (!seen[key]) merged.push(group);
+  });
+
+  return merged;
+}
+
+function extractTextFromMessagePart(part) {
+  if (!part) return "";
+  if (typeof part === "string") return part;
+  if (Array.isArray(part)) {
+    return part.map(extractTextFromMessagePart).filter(Boolean).join("\n");
+  }
+  if (typeof part.text === "string") return part.text;
+  if (typeof part.result === "string") return part.result;
+  if (typeof part.content === "string") return part.content;
+  if (Array.isArray(part.content)) {
+    return part.content.map(extractTextFromMessagePart).filter(Boolean).join("\n");
+  }
+  if (Array.isArray(part.parts)) {
+    return part.parts.map(extractTextFromMessagePart).filter(Boolean).join("\n");
+  }
+  if (typeof part.value === "string") return part.value;
+  return "";
+}
+
+function extractTextFromConversationMessage(message) {
+  if (!message || !message.content) return "";
+  var content = message.content;
+  if (typeof content === "string") return content.trim();
+  if (typeof content.text === "string") return content.text.trim();
+  if (Array.isArray(content.parts)) {
+    return content.parts.map(extractTextFromMessagePart).filter(Boolean).join("\n").trim();
+  }
+  return extractTextFromMessagePart(content).trim();
+}
+
+function appendHeadingsFromText(group, text) {
+  if (!text) return;
+  var seenTitles = {};
+  for (var i = 0; i < group.subs.length; i++) {
+    seenTitles[group.subs[i].title] = true;
+  }
+
+  var lines = text.split(/\r?\n/);
+  lines.forEach(function (line) {
+    var match = line.match(/^(#{1,4})\s+(.+)$/);
+    if (!match) return;
+    var title = match[2].trim();
+    if (!title || seenTitles[title]) return;
+    group.subs.push({
+      title: title,
+      depth: Math.max(0, match[1].length - 1),
+      el: null,
+    });
+    seenTitles[title] = true;
+  });
+}
+
+function buildGroupsFromConversationData(data) {
+  if (!data || !data.mapping) return [];
+
+  var entries = [];
+  Object.keys(data.mapping).forEach(function (key) {
+    var item = data.mapping[key];
+    var message = item && item.message;
+    if (!message || !message.author) return;
+
+    var role = message.author.role;
+    if (role !== "user" && role !== "assistant") return;
+
+    var text = extractTextFromConversationMessage(message);
+    if (!text) return;
+
+    entries.push({
+      id: message.id || key,
+      role: role,
+      text: text,
+      createTime: typeof message.create_time === "number" ? message.create_time : 0,
+    });
+  });
+
+  entries.sort(function (a, b) {
+    if (a.createTime === b.createTime) return a.role === "user" ? -1 : 1;
+    return a.createTime - b.createTime;
+  });
+
+  var groups = [];
+  var currentGroup = null;
+  entries.forEach(function (entry, idx) {
+    if (entry.role === "user") {
+      var title = truncate(entry.text, 50);
+      if (!title) return;
+      var prev = groups[groups.length - 1];
+      if (prev && prev.id === entry.id) return;
+
+      currentGroup = {
+        id: entry.id,
+        title: title,
+        text: entry.text,
+        el: null,
+        userIndex: idx,
+        subs: [],
+        assistantText: "",
+        assistantEl: null,
+        assistantId: "",
+        assistantIndex: -1,
+        assistantExcerpt: "",
+      };
+      groups.push(currentGroup);
+      return;
+    }
+
+    if (!currentGroup) return;
+    if (!currentGroup.assistantEl) {
+      currentGroup.assistantId = entry.id;
+      currentGroup.assistantIndex = idx;
+      currentGroup.assistantExcerpt = truncate(entry.text, 80);
+    }
+    currentGroup.assistantText = currentGroup.assistantText
+      ? currentGroup.assistantText + "\n\n" + entry.text
+      : entry.text;
+    appendHeadingsFromText(currentGroup, entry.text);
+  });
+
+  return groups;
+}
+
+function getCachedConversationGroups(conversationId) {
+  var key = getConversationCacheKey(conversationId);
+  if (!key) {
+    cachedConversationKey = "";
+    cachedConversationGroups = null;
+    return [];
+  }
+
+  if (cachedConversationKey === key && cachedConversationGroups) {
+    return cachedConversationGroups;
+  }
+
+  cachedConversationKey = key;
+  cachedConversationGroups = safeJsonParse(localStorage.getItem(key), []) || [];
+  return cachedConversationGroups;
+}
+
+function setCachedConversationGroups(groups, conversationId) {
+  var key = getConversationCacheKey(conversationId);
+  if (!key || !groups || groups.length === 0) return false;
+
+  cachedConversationKey = key;
+  cachedConversationGroups = groups;
+  try {
+    localStorage.setItem(key, JSON.stringify(compactGroupsForCache(groups)));
+    trackConversationCacheKey(key);
+  } catch (_) {}
+  return true;
+}
+
+function getConversationIdFromPayload(data, sourceUrl) {
+  return (
+    extractConversationIdFromUrl(sourceUrl) ||
+    data.conversation_id ||
+    data.id ||
+    ""
+  );
+}
+
+function ingestConversationPayload(data, sourceUrl) {
+  if (!isChatGPTHost() || !data || !data.mapping) return false;
+  var conversationId = getConversationIdFromPayload(data, sourceUrl);
+  if (!conversationId) return false;
+  var groups = buildGroupsFromConversationData(data);
+  if (groups.length === 0) return false;
+  return setCachedConversationGroups(groups, conversationId);
+}
+
+function buildGroupsFromDOMMessages(allMsgs) {
+  if (!allMsgs || allMsgs.length === 0) return [];
+
+  var newGroups = [];
+  var currentGroup = null;
+
+  allMsgs.forEach(function (node, idx) {
+    var role = detectRole(node);
+    if (role === "unknown") return;
+
+    if (role === "user") {
+      var text = getMessageText(node, "user");
+      var title = truncate(text, 50);
+      if (title) {
+        var prev = newGroups[newGroups.length - 1];
+        if (prev && prev.title === title) return;
+
+        currentGroup = {
+          id: getMessageId(node, idx, "user"),
+          title: title,
+          text: text,
+          el: node,
+          userIndex: idx,
+          subs: [],
+          assistantText: "",
+          assistantEl: null,
+          assistantId: "",
+          assistantIndex: -1,
+          assistantExcerpt: "",
+        };
+        newGroups.push(currentGroup);
+      }
+    } else if (role === "assistant" && currentGroup) {
+      appendAssistantContent(currentGroup, node, idx);
+    }
+  });
+
+  return newGroups;
 }
 
 function findMessagesHeuristically() {
@@ -291,47 +672,41 @@ function appendAssistantContent(group, node, idx) {
   appendHeadings(group, getMessageBodyNode(node, "assistant") || node);
 }
 
-function buildTOC() {
-  var allMsgs = findAllMessages();
-  if (allMsgs.length === 0) { scheduleScan(); return; }
+async function buildTOC() {
+  if (isBuildingTOC) {
+    pendingTOCBuild = true;
+    return;
+  }
 
-  var newGroups = [];
-  var currentGroup = null;
+  isBuildingTOC = true;
+  var restoreSnapshot = null;
 
-  allMsgs.forEach(function (node, idx) {
-    var role = detectRole(node);
-    if (role === "unknown") return;
-
-    if (role === "user") {
-      var text = getMessageText(node, "user");
-      var title = truncate(text, 50);
-      if (title) {
-        var prev = newGroups[newGroups.length - 1];
-        if (prev && prev.title === title) return;
-
-        currentGroup = {
-          id: getMessageId(node, idx, "user"),
-          title: title,
-          text: text,
-          el: node,
-          userIndex: idx,
-          subs: [],
-          assistantText: "",
-          assistantEl: null,
-          assistantId: "",
-          assistantIndex: -1,
-          assistantExcerpt: "",
-        };
-        newGroups.push(currentGroup);
-      }
-    } else if (role === "assistant" && currentGroup) {
-      appendAssistantContent(currentGroup, node, idx);
+  try {
+    var cachedGroups = getCachedConversationGroups();
+    if (cachedGroups.length > 0) {
+      if (groupsEqual(window._groups || [], cachedGroups)) return;
+      window._groups = cachedGroups;
+      renderTOC(cachedGroups);
+      return;
     }
-  });
 
-  if (groupsEqual(window._groups || [], newGroups)) return;
-  window._groups = newGroups;
-  renderTOC(newGroups);
+    restoreSnapshot = await hydrateHistoryForTOC();
+    var allMsgs = findAllMessages();
+    if (allMsgs.length === 0) { scheduleScan(); return; }
+
+    var newGroups = buildGroupsFromDOMMessages(allMsgs);
+    var mergedGroups = mergeGroupsForHydratedHistory(window._groups || [], newGroups);
+    if (groupsEqual(window._groups || [], mergedGroups)) return;
+    window._groups = mergedGroups;
+    renderTOC(mergedGroups);
+  } finally {
+    if (restoreSnapshot) restoreNavigationSnapshot(restoreSnapshot, "auto");
+    isBuildingTOC = false;
+    if (pendingTOCBuild) {
+      pendingTOCBuild = false;
+      scheduleScan();
+    }
+  }
 }
 
 function scheduleScan() {

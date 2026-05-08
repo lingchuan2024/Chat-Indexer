@@ -118,7 +118,7 @@ function renderTOC(groups) {
     label.addEventListener("click", function (e) {
       e.stopPropagation();
       var gEl = resolveGroupEl(group);
-      if (gEl) scrollToEl(gEl);
+      if (gEl) navigateToEl(gEl);
     });
     header.appendChild(label);
 
@@ -140,7 +140,7 @@ function renderTOC(groups) {
       subItem.addEventListener("click", function (e) {
         e.stopPropagation();
         var sEl = resolveSubEl(group, sub);
-        if (sEl) scrollToEl(sEl);
+        if (sEl) navigateToEl(sEl);
       });
       subsEl.appendChild(subItem);
     });
@@ -163,7 +163,7 @@ function renderTOC(groups) {
             var assistantEl = resolveAssistantEl(capturedGroup);
             var gEl = resolveGroupEl(capturedGroup);
             var target = assistantEl ? findTextContainer(assistantEl, capturedQuery) || assistantEl : gEl;
-            scrollToEl(target);
+            navigateToEl(target);
           });
           subsEl.appendChild(snipItem);
         })();

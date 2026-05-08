@@ -2,6 +2,9 @@
 "use strict";
 
 const DEBUG = false;
+var navigationHistory = [];
+var isRestoringNavigation = false;
+
 function log(...args) { if (DEBUG) console.log("[AITOC]", ...args); }
 
 function stripMarkdown(text) {
@@ -67,12 +70,202 @@ function groupsEqual(a, b) {
   return true;
 }
 
+function getScrollRoot() {
+  var selectors = typeof getScrollSelectors === "function" ? getScrollSelectors() : [];
+  for (var i = 0; i < selectors.length; i++) {
+    try {
+      var el = document.querySelector(selectors[i]);
+      if (!el) continue;
+      var style = window.getComputedStyle(el);
+      var canScroll = el.scrollHeight - el.clientHeight > 40;
+      if (canScroll && (style.overflowY === "auto" || style.overflowY === "scroll")) return el;
+    } catch (_) {}
+  }
+  return document.scrollingElement || document.documentElement;
+}
+
+function isScrollableElement(el) {
+  if (!el || el === document.body || el === document.documentElement) return false;
+  var style = window.getComputedStyle(el);
+  var overflowY = style.overflowY;
+  return (overflowY === "auto" || overflowY === "scroll") && el.scrollHeight - el.clientHeight > 40;
+}
+
+function getNearestScrollableAncestor(el) {
+  var current = el;
+  while (current && current !== document.body) {
+    if (isScrollableElement(current)) return current;
+    current = current.parentElement;
+  }
+  return document.scrollingElement || document.documentElement;
+}
+
+function isIgnoredAnchorNode(node) {
+  if (!node || node.nodeType !== Node.ELEMENT_NODE) return true;
+  if (node.id === "ctoc-sidebar" || node.id === "ctoc-toggle-btn") return true;
+  if (node.closest && (node.closest("#ctoc-sidebar") || node.closest("#ctoc-toggle-btn"))) return true;
+  if (/^(button|input|textarea|svg|path)$/i.test(node.tagName)) return true;
+  return false;
+}
+
+function findAnchorFromNode(node) {
+  var current = node;
+  var best = null;
+
+  while (current && current !== document.body) {
+    if (isIgnoredAnchorNode(current)) {
+      current = current.parentElement;
+      continue;
+    }
+
+    var text = (current.textContent || "").trim();
+    if (text.length >= 20) best = current;
+
+    if (/^(p|li|pre|blockquote|h1|h2|h3|h4|article|section)$/i.test(current.tagName)) {
+      return current;
+    }
+
+    current = current.parentElement;
+  }
+
+  return best;
+}
+
+function findNavigationAnchor() {
+  var x = Math.max(24, Math.floor(window.innerWidth * 0.5));
+  var yCandidates = [
+    Math.floor(window.innerHeight * 0.4),
+    Math.floor(window.innerHeight * 0.55),
+    Math.floor(window.innerHeight * 0.3),
+  ];
+
+  for (var i = 0; i < yCandidates.length; i++) {
+    var y = Math.max(24, yCandidates[i]);
+    var stack = [];
+    if (typeof document.elementsFromPoint === "function") stack = document.elementsFromPoint(x, y);
+    else {
+      var single = document.elementFromPoint(x, y);
+      if (single) stack = [single];
+    }
+
+    for (var j = 0; j < stack.length; j++) {
+      var anchor = findAnchorFromNode(stack[j]);
+      if (anchor) return anchor;
+    }
+  }
+
+  return null;
+}
+
+function getAnchorOffset(anchorEl, scrollEl, isDocumentScroll) {
+  var anchorRect = anchorEl.getBoundingClientRect();
+  if (isDocumentScroll) return anchorRect.top;
+  var containerRect = scrollEl.getBoundingClientRect();
+  return anchorRect.top - containerRect.top;
+}
+
+function captureNavigationSnapshot() {
+  var anchorEl = findNavigationAnchor();
+  var scrollEl = anchorEl ? getNearestScrollableAncestor(anchorEl) : getScrollRoot();
+  if (!scrollEl) return null;
+
+  var isDocumentScroll =
+    scrollEl === document.body ||
+    scrollEl === document.documentElement ||
+    scrollEl === document.scrollingElement;
+
+  return {
+    anchorEl: anchorEl,
+    anchorOffset: anchorEl ? getAnchorOffset(anchorEl, scrollEl, isDocumentScroll) : 0,
+    isDocumentScroll: isDocumentScroll,
+    scrollEl: isDocumentScroll ? null : scrollEl,
+    scrollTop: isDocumentScroll ? window.scrollY : scrollEl.scrollTop,
+  };
+}
+
+function notifyNavigationHistoryChange() {
+  if (typeof updateReturnButtonState === "function") updateReturnButtonState();
+}
+
+function rememberCurrentPosition() {
+  if (isRestoringNavigation) return;
+
+  var snapshot = captureNavigationSnapshot();
+  if (!snapshot) return;
+
+  var last = navigationHistory[navigationHistory.length - 1];
+  if (
+    last &&
+    last.isDocumentScroll === snapshot.isDocumentScroll &&
+    Math.abs(last.scrollTop - snapshot.scrollTop) < 24
+  ) {
+    return;
+  }
+
+  navigationHistory.push(snapshot);
+  if (navigationHistory.length > 20) navigationHistory.shift();
+  notifyNavigationHistoryChange();
+}
+
+function canReturnToPreviousPosition() {
+  return navigationHistory.length > 0;
+}
+
+function returnToPreviousPosition() {
+  var snapshot = navigationHistory.pop();
+  if (!snapshot) {
+    notifyNavigationHistoryChange();
+    return;
+  }
+
+  var scrollEl = snapshot.isDocumentScroll
+    ? (document.scrollingElement || document.documentElement)
+    : (snapshot.scrollEl && snapshot.scrollEl.isConnected ? snapshot.scrollEl : getScrollRoot());
+
+  isRestoringNavigation = true;
+  if (snapshot.anchorEl && snapshot.anchorEl.isConnected) {
+    var anchorScrollEl = snapshot.isDocumentScroll
+      ? (document.scrollingElement || document.documentElement)
+      : getNearestScrollableAncestor(snapshot.anchorEl);
+    var targetScrollEl = snapshot.isDocumentScroll ? scrollEl : anchorScrollEl;
+    var targetTop = snapshot.scrollTop;
+
+    if (snapshot.isDocumentScroll) {
+      targetTop = window.scrollY + snapshot.anchorEl.getBoundingClientRect().top - snapshot.anchorOffset;
+      window.scrollTo({ top: Math.max(0, targetTop), behavior: "smooth" });
+    } else if (targetScrollEl && typeof targetScrollEl.scrollTo === "function") {
+      targetTop =
+        targetScrollEl.scrollTop +
+        getAnchorOffset(snapshot.anchorEl, targetScrollEl, false) -
+        snapshot.anchorOffset;
+      targetScrollEl.scrollTo({ top: Math.max(0, targetTop), behavior: "smooth" });
+    }
+  } else if (snapshot.isDocumentScroll) {
+    window.scrollTo({ top: snapshot.scrollTop, behavior: "smooth" });
+  } else if (scrollEl && typeof scrollEl.scrollTo === "function") {
+    scrollEl.scrollTo({ top: snapshot.scrollTop, behavior: "smooth" });
+  }
+
+  setTimeout(function () {
+    isRestoringNavigation = false;
+    if (typeof syncActiveItem === "function") syncActiveItem();
+  }, 450);
+
+  notifyNavigationHistoryChange();
+}
+
 function scrollToEl(el) {
   if (!el) return;
   el.scrollIntoView({ behavior: "smooth", block: "center" });
   el.style.transition = "box-shadow 0.3s";
   el.style.boxShadow = "0 0 0 3px rgba(16,163,127,0.5)";
   setTimeout(function () { el.style.boxShadow = ""; }, 2000);
+}
+
+function navigateToEl(el) {
+  if (!el) return;
+  rememberCurrentPosition();
+  scrollToEl(el);
 }
 
 function findTextContainer(el, query) {

@@ -8,6 +8,7 @@ var SIDEBAR_GAP = 8;
 
 var sidebar = null;
 var toggleBtn = null;
+var returnBtn = null;
 var searchInput = null;
 var isVisible = true;
 var sidebarWidth = SIDEBAR_DEFAULT_WIDTH;
@@ -67,6 +68,13 @@ function toggleSidebar() {
   }
 }
 
+function updateReturnButtonState() {
+  if (!returnBtn) return;
+  var disabled = !canReturnToPreviousPosition();
+  returnBtn.disabled = disabled;
+  returnBtn.title = disabled ? "暂无可返回位置" : "返回上一位置";
+}
+
 function createSidebar() {
   if (document.getElementById("ctoc-sidebar")) return;
 
@@ -93,6 +101,15 @@ function createSidebar() {
   searchInput.addEventListener("mousedown", function (e) { e.stopPropagation(); });
   hdr.appendChild(searchInput);
 
+  returnBtn = document.createElement("button");
+  returnBtn.className = "ctoc-btn";
+  returnBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H7"/><polyline points="12 17 7 12 12 7"/></svg>';
+  returnBtn.addEventListener("click", function (e) {
+    e.stopPropagation();
+    returnToPreviousPosition();
+  });
+  hdr.appendChild(returnBtn);
+
   var collapseBtn = document.createElement("button");
   collapseBtn.className = "ctoc-btn";
   collapseBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg>';
@@ -118,6 +135,8 @@ function createSidebar() {
   // restore saved position
   var savedTop = localStorage.getItem("ctoc-top");
   if (savedTop) sidebar.style.top = savedTop;
+
+  updateReturnButtonState();
 }
 
 function makeResizable(handle) {

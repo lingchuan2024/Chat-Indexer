@@ -17,12 +17,13 @@
 
 请从 GitHub Releases 下载最新版安装包：
 
-- [下载最新版本](https://github.com/lingchuan2024/-AI-Chat-/releases/latest)
+- [下载最新版本](https://github.com/lingchuan2024/Chat-Indexer/releases/latest)
 
 ## 功能
 
 - 自动按对话生成目录
 - 点击目录快速跳转到对应位置
+- 支持一键返回上一个阅读位置
 - 支持目录搜索
 - 支持当前阅读位置高亮
 - 支持折叠 / 展开目录
@@ -50,7 +51,7 @@
 
 ### Chrome / Edge
 
-1. 打开 [最新 Release](https://github.com/lingchuan2024/-AI-Chat-/releases/latest)
+1. 打开 [最新 Release](https://github.com/lingchuan2024/Chat-Indexer/releases/latest)
 2. 下载最新的扩展安装包 `zip`
 3. 解压 `zip`
 4. 打开浏览器扩展页面
@@ -68,6 +69,7 @@
 你可以这样用：
 
 - 点击目录项：跳转到对应提问
+- 点击顶部返回按钮：回到跳转前的阅读位置
 - 点击左侧箭头：展开或折叠该轮回答里的标题
 - 使用搜索框：筛选问题、标题和回答内容
 - 拖动左边缘：调整目录宽度
@@ -111,7 +113,7 @@
 
 如果你遇到兼容问题，欢迎提交 Issue：
 
-- [提交 Issue](https://github.com/lingchuan2024/-AI-Chat-/issues)
+- [提交 Issue](https://github.com/lingchuan2024/Chat-Indexer/issues)
 
 建议附带：
 
@@ -124,7 +126,7 @@
 
 所有可下载版本请查看：
 
-- [Releases](https://github.com/lingchuan2024/-AI-Chat-/releases)
+- [Releases](https://github.com/lingchuan2024/Chat-Indexer/releases)
 
 ## 开发说明
 

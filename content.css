@@ -107,6 +107,16 @@
   color: #e0e7ff;
 }
 
+.ctoc-btn:disabled {
+  color: #4b5563;
+  cursor: not-allowed;
+}
+
+.ctoc-btn:disabled:hover {
+  background: none;
+  color: #4b5563;
+}
+
 /* ---- list ---- */
 .ctoc-list {
   flex: 1;

@@ -16,6 +16,7 @@ function resetConversationState() {
   cachedConversationKey = "";
   cachedConversationGroups = null;
   window._groups = [];
+  if (typeof clearNavigationHistory === "function") clearNavigationHistory();
   if (typeof renderTOC === "function") renderTOC([]);
 }
 
@@ -364,25 +365,44 @@ async function hydrateHistoryForTOC() {
 function mergeGroupsForHydratedHistory(oldGroups, newGroups) {
   if (!oldGroups || oldGroups.length === 0) return newGroups;
   if (hydratedHistoryUrl !== location.href || newGroups.length >= oldGroups.length) return newGroups;
+  return mergeGroupsPreservingExisting(oldGroups, newGroups);
+}
+
+function mergeGroupsPreservingExisting(oldGroups, newGroups) {
+  if (!oldGroups || oldGroups.length === 0) return newGroups;
+  if (!newGroups || newGroups.length === 0) return oldGroups;
+  if (newGroups.length >= oldGroups.length) return newGroups;
 
   var merged = [];
   var seen = {};
   var freshByKey = {};
 
+  function idTitleKey(group) {
+    return (group.id || "") + "::" + group.title;
+  }
+
+  function titleKey(group) {
+    return "title::" + group.title;
+  }
+
   newGroups.forEach(function (group) {
-    freshByKey[(group.id || "") + "::" + group.title] = group;
+    freshByKey[idTitleKey(group)] = group;
+    if (!freshByKey[titleKey(group)]) freshByKey[titleKey(group)] = group;
   });
 
   oldGroups.forEach(function (group) {
-    var key = (group.id || "") + "::" + group.title;
-    var fresh = freshByKey[key];
+    var key = idTitleKey(group);
+    var fallbackKey = titleKey(group);
+    var fresh = freshByKey[key] || freshByKey[fallbackKey];
     merged.push(fresh || group);
     seen[key] = true;
+    seen[fallbackKey] = true;
   });
 
   newGroups.forEach(function (group) {
-    var key = (group.id || "") + "::" + group.title;
-    if (!seen[key]) merged.push(group);
+    var key = idTitleKey(group);
+    var fallbackKey = titleKey(group);
+    if (!seen[key] && !seen[fallbackKey]) merged.push(group);
   });
 
   return merged;
@@ -444,7 +464,19 @@ function buildGroupsFromConversationData(data) {
   if (!data || !data.mapping) return [];
 
   var entries = [];
-  Object.keys(data.mapping).forEach(function (key) {
+  var activeKeys = [];
+  var currentKey = data.current_node || "";
+  var seenKeys = {};
+
+  while (currentKey && data.mapping[currentKey] && !seenKeys[currentKey]) {
+    activeKeys.push(currentKey);
+    seenKeys[currentKey] = true;
+    currentKey = data.mapping[currentKey].parent || "";
+  }
+  activeKeys.reverse();
+
+  var keys = activeKeys.length > 0 ? activeKeys : Object.keys(data.mapping);
+  keys.forEach(function (key) {
     var item = data.mapping[key];
     var message = item && item.message;
     if (!message || !message.author) return;
@@ -463,10 +495,12 @@ function buildGroupsFromConversationData(data) {
     });
   });
 
-  entries.sort(function (a, b) {
-    if (a.createTime === b.createTime) return a.role === "user" ? -1 : 1;
-    return a.createTime - b.createTime;
-  });
+  if (activeKeys.length === 0) {
+    entries.sort(function (a, b) {
+      if (a.createTime === b.createTime) return 0;
+      return a.createTime - b.createTime;
+    });
+  }
 
   var groups = [];
   var currentGroup = null;
@@ -495,7 +529,7 @@ function buildGroupsFromConversationData(data) {
     }
 
     if (!currentGroup) return;
-    if (!currentGroup.assistantEl) {
+    if (!currentGroup.assistantId) {
       currentGroup.assistantId = entry.id;
       currentGroup.assistantIndex = idx;
       currentGroup.assistantExcerpt = truncate(entry.text, 80);
@@ -536,6 +570,24 @@ function setCachedConversationGroups(groups, conversationId) {
     localStorage.setItem(key, JSON.stringify(compactGroupsForCache(groups)));
     trackConversationCacheKey(key);
   } catch (_) {}
+  return true;
+}
+
+function clearCachedConversationGroups(conversationId) {
+  var key = getConversationCacheKey(conversationId);
+  if (!key) return false;
+
+  try {
+    localStorage.removeItem(key);
+    writeConversationCacheIndex(readConversationCacheIndex().filter(function (entry) {
+      return entry.key !== key;
+    }));
+  } catch (_) {}
+
+  if (cachedConversationKey === key) {
+    cachedConversationKey = "";
+    cachedConversationGroups = null;
+  }
   return true;
 }
 
@@ -672,7 +724,7 @@ function appendAssistantContent(group, node, idx) {
   appendHeadings(group, getMessageBodyNode(node, "assistant") || node);
 }
 
-async function buildTOC() {
+async function buildTOC(options) {
   if (isBuildingTOC) {
     pendingTOCBuild = true;
     return;
@@ -680,25 +732,34 @@ async function buildTOC() {
 
   isBuildingTOC = true;
   var restoreSnapshot = null;
+  var force = options && options.force === true;
 
   try {
-    var cachedGroups = getCachedConversationGroups();
+    var cachedGroups = force ? [] : getCachedConversationGroups();
+    var baseGroups = window._groups || [];
     if (cachedGroups.length > 0) {
-      if (groupsEqual(window._groups || [], cachedGroups)) return;
-      window._groups = cachedGroups;
-      renderTOC(cachedGroups);
+      baseGroups = cachedGroups;
+      if (!groupsEqual(window._groups || [], cachedGroups)) {
+        window._groups = cachedGroups;
+        renderTOC(cachedGroups);
+      }
+    }
+
+    restoreSnapshot = cachedGroups.length > 0 ? null : await hydrateHistoryForTOC();
+    var allMsgs = findAllMessages();
+    if (allMsgs.length === 0) {
+      if (cachedGroups.length === 0) scheduleScan();
       return;
     }
 
-    restoreSnapshot = await hydrateHistoryForTOC();
-    var allMsgs = findAllMessages();
-    if (allMsgs.length === 0) { scheduleScan(); return; }
-
     var newGroups = buildGroupsFromDOMMessages(allMsgs);
-    var mergedGroups = mergeGroupsForHydratedHistory(window._groups || [], newGroups);
+    var mergedGroups = mergeGroupsPreservingExisting(baseGroups, mergeGroupsForHydratedHistory(baseGroups, newGroups));
     if (groupsEqual(window._groups || [], mergedGroups)) return;
     window._groups = mergedGroups;
     renderTOC(mergedGroups);
+    if (isChatGPTHost() && (cachedGroups.length === 0 || mergedGroups.length > cachedGroups.length)) {
+      setCachedConversationGroups(mergedGroups, getConversationIdFromLocation());
+    }
   } finally {
     if (restoreSnapshot) restoreNavigationSnapshot(restoreSnapshot, "auto");
     isBuildingTOC = false;

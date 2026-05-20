@@ -22,12 +22,16 @@
     };
   }
 
-  async function requestChatGPTConversationData() {
+  async function requestChatGPTConversationData(options) {
     if (!isChatGPTHost()) return;
 
+    var force = options && options.force === true;
     var conversationId = getConversationIdFromLocation();
     if (!conversationId) return;
-    if (getCachedConversationGroups(conversationId).length > 0) return;
+    if (force) {
+      requestToken = "";
+      clearCachedConversationGroups(conversationId);
+    }
     if (requestToken === conversationId) return;
     requestToken = conversationId;
     var requestVersion = navigationVersion;
@@ -50,15 +54,28 @@
           if (ingestConversationPayload(data, candidates[i])) {
             if (requestVersion !== navigationVersion) break;
             if (getConversationIdFromLocation() !== conversationId) break;
-            buildTOC();
-            break;
+            await buildTOC();
+            return true;
           }
         } catch (_) {}
       }
     } finally {
       if (requestToken === conversationId) requestToken = "";
     }
+    return false;
   }
+
+  async function refreshTOC() {
+    requestToken = "";
+    if (isChatGPTHost()) {
+      var updatedFromApi = await requestChatGPTConversationData({ force: true });
+      if (!updatedFromApi) await buildTOC({ force: true });
+    } else {
+      await buildTOC({ force: true });
+    }
+  }
+
+  window.ctocRefresh = refreshTOC;
 
   function init() {
     if (initialized) {

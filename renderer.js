@@ -3,15 +3,65 @@
 
 var tocList = null;
 var lastActiveGroupEl = null;
+var navigationNoticeTimer = null;
 
 function getGroupSearchText(group) {
   return group.assistantText || group.assistantSearchText || group.assistantExcerpt || "";
 }
 
+function setNavigationNotice(text, type) {
+  if (!tocList) return;
+
+  var notice = tocList.querySelector(".ctoc-status");
+  if (!notice) {
+    notice = document.createElement("div");
+    notice.className = "ctoc-status";
+    tocList.insertBefore(notice, tocList.firstChild);
+  }
+
+  notice.textContent = text;
+  notice.className = "ctoc-status " + (type || "");
+
+  clearTimeout(navigationNoticeTimer);
+  if (type !== "ctoc-status-loading") {
+    navigationNoticeTimer = setTimeout(function () {
+      if (notice && notice.parentElement) notice.remove();
+    }, 2600);
+  }
+}
+
+function clearNavigationNoticeSoon() {
+  clearTimeout(navigationNoticeTimer);
+  navigationNoticeTimer = setTimeout(function () {
+    var notice = tocList && tocList.querySelector(".ctoc-status");
+    if (notice) notice.remove();
+  }, 800);
+}
+
+function setNavigationItemState(item, state) {
+  if (!item) return;
+  item.classList.remove("ctoc-locating", "ctoc-nav-failed");
+  item.removeAttribute("aria-busy");
+
+  if (state === "loading") {
+    item.classList.add("ctoc-locating");
+    item.setAttribute("aria-busy", "true");
+  } else if (state === "failed") {
+    item.classList.add("ctoc-nav-failed");
+    setTimeout(function () {
+      if (item && item.classList) item.classList.remove("ctoc-nav-failed");
+    }, 2600);
+  }
+}
+
 function textLooksSimilar(expected, actual) {
   if (!expected || !actual) return false;
-  if (actual.indexOf(expected) === 0 || expected.indexOf(actual) === 0) return true;
-  return actual.indexOf(expected.slice(0, Math.min(expected.length, 24))) !== -1;
+  var normalizedExpected = normalizeComparableText(expected);
+  var normalizedActual = normalizeComparableText(actual);
+  if (!normalizedExpected || !normalizedActual) return false;
+  if (normalizedActual === normalizedExpected) return true;
+  if (normalizedActual.indexOf(normalizedExpected) === 0 || normalizedExpected.indexOf(normalizedActual) === 0) return true;
+  return normalizedActual.indexOf(normalizedExpected.slice(0, Math.min(normalizedExpected.length, 24))) !== -1;
 }
 
 function findMatchingMessage(group, role) {
@@ -57,19 +107,235 @@ function resolveAssistantEl(group) {
   return el;
 }
 
-function resolveSubEl(group, sub) {
+function resolveSubEl(group, sub, options) {
   if (sub.el && sub.el.isConnected) return sub.el;
 
-  var container = resolveAssistantEl(group) || resolveGroupEl(group) || document;
+  var assistantEl = resolveAssistantEl(group);
+  var groupEl = resolveGroupEl(group);
+  var container = assistantEl || groupEl || document;
 
   var headings = container.querySelectorAll("h1, h2, h3, h4");
   for (var i = 0; i < headings.length; i++) {
-    if ((headings[i].textContent || "").trim() === sub.title) {
+    var headingText = (headings[i].textContent || "").trim();
+    if (headingText === sub.title || textLooksSimilar(sub.title, headingText)) {
       sub.el = headings[i];
       return headings[i];
     }
   }
-  return null;
+
+  var fallback = findBestTextMatch(container, sub.title) || findTextContainer(container, sub.title);
+  if (fallback) {
+    sub.el = fallback;
+    return fallback;
+  }
+  if (options && options.allowMessageFallback === false) return null;
+  return assistantEl || groupEl || null;
+}
+
+function getNavigationScrollEl() {
+  return getScrollRoot();
+}
+
+function isDocumentScrollEl(scrollEl) {
+  return (
+    scrollEl === document.body ||
+    scrollEl === document.documentElement ||
+    scrollEl === document.scrollingElement
+  );
+}
+
+function getScrollTopValue(scrollEl) {
+  return isDocumentScrollEl(scrollEl) ? window.scrollY : scrollEl.scrollTop;
+}
+
+function getMaxScrollTopValue(scrollEl) {
+  if (isDocumentScrollEl(scrollEl)) {
+    var doc = document.scrollingElement || document.documentElement;
+    return Math.max(0, doc.scrollHeight - window.innerHeight);
+  }
+  return Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+}
+
+function getViewportHeightValue(scrollEl) {
+  return isDocumentScrollEl(scrollEl) ? window.innerHeight : scrollEl.clientHeight;
+}
+
+function setScrollTopValue(scrollEl, top, behavior) {
+  var targetTop = Math.max(0, Math.min(top, getMaxScrollTopValue(scrollEl)));
+  var options = { top: targetTop, behavior: behavior || "auto" };
+  if (isDocumentScrollEl(scrollEl)) window.scrollTo(options);
+  else if (scrollEl && typeof scrollEl.scrollTo === "function") scrollEl.scrollTo(options);
+  else if (scrollEl) scrollEl.scrollTop = targetTop;
+}
+
+function getGroupIndex(group) {
+  var groups = window._groups || [];
+  return groups.indexOf(group);
+}
+
+function findCurrentGroup(group) {
+  var groups = window._groups || [];
+  var exactIndex = groups.indexOf(group);
+  if (exactIndex >= 0) return groups[exactIndex];
+
+  for (var i = 0; i < groups.length; i++) {
+    if (group.id && groups[i].id === group.id) return groups[i];
+  }
+
+  for (var j = 0; j < groups.length; j++) {
+    if (groups[j].title === group.title) return groups[j];
+  }
+
+  return group;
+}
+
+function findCurrentSub(group, sub) {
+  var currentGroup = findCurrentGroup(group);
+  var subs = currentGroup.subs || [];
+  for (var i = 0; i < subs.length; i++) {
+    if (subs[i] === sub || subs[i].title === sub.title) return subs[i];
+  }
+  return sub;
+}
+
+function getCurrentVisibleGroupIndex() {
+  var groups = window._groups || [];
+  var viewCenter = window.innerHeight / 2;
+  var bestIndex = -1;
+  var bestDist = Infinity;
+
+  for (var i = 0; i < groups.length; i++) {
+    var el = resolveGroupEl(groups[i]);
+    if (!el) continue;
+    var rect = el.getBoundingClientRect();
+    if (rect.bottom < 0 || rect.top > window.innerHeight) continue;
+    var dist = Math.abs(rect.top + rect.height / 2 - viewCenter);
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestIndex = i;
+    }
+  }
+
+  return bestIndex;
+}
+
+function waitForNavigationScroll(ms) {
+  return new Promise(function (resolve) {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function revealGroupForNavigation(group) {
+  group = findCurrentGroup(group);
+  var existing = resolveGroupEl(group);
+  if (existing) return existing;
+
+  var groups = window._groups || [];
+  var targetIndex = getGroupIndex(group);
+  var scrollEl = getNavigationScrollEl();
+  if (!scrollEl || targetIndex < 0 || groups.length <= 1) return null;
+
+  var maxScroll = getMaxScrollTopValue(scrollEl);
+  var viewportHeight = getViewportHeightValue(scrollEl);
+  var currentIndex = getCurrentVisibleGroupIndex();
+  var direction = currentIndex >= 0 && targetIndex < currentIndex ? -1 : 1;
+
+  setScrollTopValue(scrollEl, maxScroll * (targetIndex / Math.max(1, groups.length - 1)), "auto");
+  await waitForNavigationScroll(350);
+
+  existing = resolveGroupEl(group);
+  if (existing) return existing;
+
+  for (var i = 0; i < 18; i++) {
+    var before = getScrollTopValue(scrollEl);
+    setScrollTopValue(scrollEl, before + direction * viewportHeight * 0.85, "auto");
+    await waitForNavigationScroll(260);
+
+    existing = resolveGroupEl(group);
+    if (existing) return existing;
+
+    var after = getScrollTopValue(scrollEl);
+    if (Math.abs(after - before) < 2) break;
+  }
+
+  return resolveGroupEl(group);
+}
+
+async function refreshForNavigation() {
+  if (typeof window.ctocRefresh !== "function") return false;
+  try {
+    await window.ctocRefresh();
+    await waitForNavigationScroll(350);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function navigateToGroup(group, item, options) {
+  rememberCurrentPosition();
+  setNavigationItemState(item, "loading");
+  setNavigationNotice("正在定位目录位置…", "ctoc-status-loading");
+
+  var currentGroup = findCurrentGroup(group);
+  var target = resolveGroupEl(currentGroup) || await revealGroupForNavigation(currentGroup);
+  if (!target && !(options && options.skipRefresh)) {
+    setNavigationNotice("未找到目标，正在刷新后重试…", "ctoc-status-loading");
+    if (await refreshForNavigation()) {
+      currentGroup = findCurrentGroup(group);
+      target = resolveGroupEl(currentGroup) || await revealGroupForNavigation(currentGroup);
+    }
+  }
+
+  if (target) {
+    scrollToEl(target);
+    setNavigationItemState(item, "");
+    setNavigationNotice("已定位", "ctoc-status-success");
+    clearNavigationNoticeSoon();
+    return true;
+  }
+
+  setNavigationItemState(item, "failed");
+  setNavigationNotice("未找到目标，请稍后刷新页面再试", "ctoc-status-error");
+  return false;
+}
+
+async function navigateToSub(group, sub, item, options) {
+  rememberCurrentPosition();
+  setNavigationItemState(item, "loading");
+  setNavigationNotice("正在定位标题…", "ctoc-status-loading");
+
+  var currentGroup = findCurrentGroup(group);
+  var currentSub = findCurrentSub(currentGroup, sub);
+  var target = resolveSubEl(currentGroup, currentSub, { allowMessageFallback: false });
+  if (!target) {
+    await revealGroupForNavigation(currentGroup);
+    currentGroup = findCurrentGroup(group);
+    currentSub = findCurrentSub(currentGroup, sub);
+    target = resolveSubEl(currentGroup, currentSub, { allowMessageFallback: false }) || resolveAssistantEl(currentGroup) || resolveGroupEl(currentGroup);
+  }
+
+  if (!target && !(options && options.skipRefresh)) {
+    setNavigationNotice("未找到标题，正在刷新后重试…", "ctoc-status-loading");
+    if (await refreshForNavigation()) {
+      currentGroup = findCurrentGroup(group);
+      currentSub = findCurrentSub(currentGroup, sub);
+      await revealGroupForNavigation(currentGroup);
+      target = resolveSubEl(currentGroup, currentSub, { allowMessageFallback: false }) || resolveAssistantEl(currentGroup) || resolveGroupEl(currentGroup);
+    }
+  }
+
+  if (target) {
+    scrollToEl(target);
+    setNavigationItemState(item, "");
+    setNavigationNotice("已定位", "ctoc-status-success");
+    clearNavigationNoticeSoon();
+    return true;
+  }
+
+  setNavigationItemState(item, "failed");
+  setNavigationNotice("未找到目标，请稍后刷新页面再试", "ctoc-status-error");
+  return false;
 }
 
 function renderTOC(groups) {
@@ -122,8 +388,7 @@ function renderTOC(groups) {
     label.title = group.title;
     label.addEventListener("click", function (e) {
       e.stopPropagation();
-      var gEl = resolveGroupEl(group);
-      if (gEl) navigateToEl(gEl);
+      navigateToGroup(group, header);
     });
     header.appendChild(label);
 
@@ -144,8 +409,7 @@ function renderTOC(groups) {
       subItem.title = sub.title;
       subItem.addEventListener("click", function (e) {
         e.stopPropagation();
-        var sEl = resolveSubEl(group, sub);
-        if (sEl) navigateToEl(sEl);
+        navigateToSub(group, sub, subItem);
       });
       subsEl.appendChild(subItem);
     });
@@ -169,7 +433,8 @@ function renderTOC(groups) {
             var assistantEl = resolveAssistantEl(capturedGroup);
             var gEl = resolveGroupEl(capturedGroup);
             var target = assistantEl ? findTextContainer(assistantEl, capturedQuery) || assistantEl : gEl;
-            navigateToEl(target);
+            if (target) navigateToEl(target);
+            else navigateToGroup(capturedGroup, snipItem);
           });
           subsEl.appendChild(snipItem);
         })();

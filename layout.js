@@ -9,6 +9,9 @@ var SIDEBAR_GAP = 8;
 var sidebar = null;
 var toggleBtn = null;
 var returnBtn = null;
+var refreshBtn = null;
+var exportBtn = null;
+var exportMenu = null;
 var searchInput = null;
 var isVisible = true;
 var sidebarWidth = SIDEBAR_DEFAULT_WIDTH;
@@ -110,6 +113,67 @@ function createSidebar() {
   });
   hdr.appendChild(returnBtn);
 
+  refreshBtn = document.createElement("button");
+  refreshBtn.className = "ctoc-btn";
+  refreshBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15.3 6.4"/><path d="M3 12A9 9 0 0 1 18.3 5.6"/><polyline points="21 5 21 12 14 12"/><polyline points="3 19 3 12 10 12"/></svg>';
+  refreshBtn.title = "刷新目录";
+  refreshBtn.addEventListener("click", function (e) {
+    e.stopPropagation();
+    if (refreshBtn.disabled) return;
+
+    refreshBtn.disabled = true;
+    refreshBtn.classList.add("ctoc-refreshing");
+
+    var done = function () {
+      refreshBtn.disabled = false;
+      refreshBtn.classList.remove("ctoc-refreshing");
+    };
+
+    try {
+      var result = typeof window.ctocRefresh === "function"
+        ? window.ctocRefresh()
+        : buildTOC({ force: true });
+      if (result && typeof result.finally === "function") result.finally(done);
+      else done();
+    } catch (_) {
+      done();
+    }
+  });
+  hdr.appendChild(refreshBtn);
+
+  var exportWrap = document.createElement("div");
+  exportWrap.className = "ctoc-export-wrap";
+
+  exportBtn = document.createElement("button");
+  exportBtn.className = "ctoc-btn";
+  exportBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
+  exportBtn.title = "导出聊天";
+  exportBtn.addEventListener("click", function (e) {
+    e.stopPropagation();
+    exportMenu.classList.toggle("ctoc-open");
+  });
+  exportWrap.appendChild(exportBtn);
+
+  exportMenu = document.createElement("div");
+  exportMenu.className = "ctoc-export-menu";
+
+  function addExportOption(label, format) {
+    var option = document.createElement("button");
+    option.type = "button";
+    option.textContent = label;
+    option.addEventListener("click", function (e) {
+      e.stopPropagation();
+      exportMenu.classList.remove("ctoc-open");
+      if (typeof window.ctocExport === "function") window.ctocExport(format);
+    });
+    exportMenu.appendChild(option);
+  }
+
+  addExportOption("Markdown", "markdown");
+  addExportOption("PDF", "pdf");
+  exportWrap.appendChild(exportMenu);
+  hdr.appendChild(exportWrap);
+
   var collapseBtn = document.createElement("button");
   collapseBtn.className = "ctoc-btn";
   collapseBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg>';
@@ -128,6 +192,10 @@ function createSidebar() {
   toggleBtn.title = "展开目录";
   toggleBtn.addEventListener("click", toggleSidebar);
   document.body.appendChild(toggleBtn);
+
+  document.addEventListener("click", function () {
+    if (exportMenu) exportMenu.classList.remove("ctoc-open");
+  });
 
   document.body.appendChild(sidebar);
   makeDraggable(sidebar, hdr);

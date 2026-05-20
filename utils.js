@@ -57,6 +57,17 @@ function truncate(text, maxLen) {
   return line.slice(0, maxLen).trimEnd() + "…";
 }
 
+function normalizeComparableText(text) {
+  return stripMarkdown(String(text || ""))
+    .toLowerCase()
+    .replace(/^[\s#>*-]+/, "")
+    .replace(/^\d+[\.\)\-:：]\s*/, "")
+    .replace(/^[一二三四五六七八九十]+\s*[、.．]\s*/, "")
+    .replace(/[()（）【】\[\]{}"'`‘’“”、,，.。:：;；!?！？/\\|]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function groupsEqual(a, b) {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
@@ -218,6 +229,12 @@ function notifyNavigationHistoryChange() {
   if (typeof updateReturnButtonState === "function") updateReturnButtonState();
 }
 
+function clearNavigationHistory() {
+  navigationHistory = [];
+  isRestoringNavigation = false;
+  notifyNavigationHistoryChange();
+}
+
 function restoreNavigationSnapshot(snapshot, behavior) {
   if (!snapshot) return;
 
@@ -329,6 +346,38 @@ function findTextContainer(el, query) {
     for (var i = 0; i < node.children.length; i++) walk(node.children[i], depth + 1);
   })(el, 0);
   return best !== el ? best : null;
+}
+
+function findBestTextMatch(el, query) {
+  if (!el || !query) return null;
+
+  var normalizedQuery = normalizeComparableText(query);
+  if (!normalizedQuery) return null;
+
+  var best = null;
+  var bestScore = -Infinity;
+  var selectors = "h1, h2, h3, h4, h5, h6, p, li, blockquote, pre, div";
+  var candidates = el.matches && el.matches(selectors) ? [el] : [];
+  candidates = candidates.concat(Array.from(el.querySelectorAll(selectors)));
+
+  candidates.forEach(function (node) {
+    var text = normalizeComparableText((node.textContent || "").trim());
+    if (!text || text.length > 300) return;
+
+    var score = -Infinity;
+    if (text === normalizedQuery) score = 1000;
+    else if (text.indexOf(normalizedQuery) === 0) score = 900 - Math.min(200, text.length - normalizedQuery.length);
+    else if (text.indexOf(normalizedQuery) !== -1) score = 700 - Math.min(200, text.length - normalizedQuery.length);
+    else if (normalizedQuery.indexOf(text) === 0 && text.length >= 8) score = 550 - (normalizedQuery.length - text.length);
+    else if (typeof textLooksSimilar === "function" && textLooksSimilar(normalizedQuery, text)) score = 400;
+
+    if (score > bestScore) {
+      best = node;
+      bestScore = score;
+    }
+  });
+
+  return bestScore > 0 ? best : null;
 }
 
 function extractSnippet(text, query) {

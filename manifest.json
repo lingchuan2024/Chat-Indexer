@@ -25,6 +25,7 @@
         "platforms.js",
         "scanner.js",
         "renderer.js",
+        "exporter.js",
         "layout.js",
         "content.js"
       ],
